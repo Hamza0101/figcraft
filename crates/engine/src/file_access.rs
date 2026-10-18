@@ -81,6 +81,11 @@ impl Roots {
 
 /// Whether `path`, made absolute with its `.` and `..` taken by name (no file system), lies in one
 /// of `roots` (as resolved, or as shown without Windows' `\\?\` prefix).
+///
+/// A root is stored resolved, so a link above `path` would otherwise put it outside every root by
+/// name alone: on macOS the temporary folder is `/var/folders/…`, a link to `/private/var/folders/…`,
+/// and a path under it shares no prefix with the root it is plainly inside. When the names do not
+/// match, the deepest ancestor that exists is resolved and compared instead.
 fn lexically_inside(path: &Path, roots: &[PathBuf]) -> bool {
     let Ok(abs) = std::path::absolute(path) else { return false };
     let mut lexical = PathBuf::new();
@@ -93,7 +98,22 @@ fn lexically_inside(path: &Path, roots: &[PathBuf]) -> bool {
             c => lexical.push(c),
         }
     }
-    roots.iter().any(|r| lexical.starts_with(r) || lexical.starts_with(shown(r)))
+    let matches = |p: &Path| roots.iter().any(|r| p.starts_with(r) || p.starts_with(shown(r)));
+    if matches(&lexical) {
+        return true;
+    }
+    let mut at = lexical.as_path();
+    loop {
+        if let Ok(resolved) = std::fs::canonicalize(at) {
+            // The part of `lexical` below the ancestor stays as written: only the ancestor moved.
+            let below = lexical.strip_prefix(at).unwrap_or(Path::new(""));
+            return matches(&resolved.join(below));
+        }
+        match at.parent() {
+            Some(parent) => at = parent,
+            None => return false,
+        }
+    }
 }
 
 /// Whether `path` lies in the app's own folder `folder`, both resolved (links and `..` followed);

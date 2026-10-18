@@ -148,6 +148,29 @@ fn roots_must_be_existing_folders() {
     assert!(f.rw().check(Path::new(""), Access::Read).is_err());
 }
 
+/// A root is stored resolved, so a path reached through a link above it shares no name with that
+/// root: on macOS `std::env::temp_dir()` is `/var/folders/…`, a link to `/private/var/folders/…`,
+/// which made every refusal inside a root read "is outside the folders that may be written" and
+/// name a root differing only by `/private`. The reason the path was refused must survive a link
+/// above the root, and the link is made here so this does not depend on the temporary folder being
+/// one.
+#[test]
+fn a_link_above_a_root_does_not_hide_why_a_path_inside_it_was_refused() {
+    let f = Fixture::new("link-above");
+    if !symlink_dir(&f.0.join("root"), &f.0.join("alias-root")) {
+        eprintln!("skipped: this system doesn't let tests make symbolic links");
+        return;
+    }
+    let r = f.rw();
+    // Reached through the link, a file that simply doesn't exist yet is still writable.
+    assert!(r.check(Path::new(&f.p("alias-root/new.png")), Access::Write).is_ok());
+    // And a refusal inside the root says why, rather than calling the path outside the root.
+    assert!(symlink_file(&f.0.join("outside/not-yet.txt"), &f.0.join("root/dangling.txt")));
+    let e = r.check(Path::new(&f.p("alias-root/dangling.txt")), Access::Write).unwrap_err();
+    assert!(e.contains("leads nowhere"), "{e}");
+    assert!(!e.contains("is outside"), "{e}");
+}
+
 #[test]
 fn links_that_lead_out_of_a_root_are_outside() {
     let f = Fixture::new("links");
